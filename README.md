@@ -1,6 +1,10 @@
 # Bayesian Nonparametric Graph Pooling
 
-This repository contains the code for the reproducibility of the experiments presented in the paper [BN-Pool: a Bayesian Nonparametric Approach for Graph Pooling](). 
+![arXiv](https://img.shields.io/badge/arXiv-{Arxiv.ID}-b31b1b.svg?)
+
+This repository contains the code for the reproducibility of the experiments presented in the paper [BN-Pool: a Bayesian Nonparametric Approach for Graph Pooling]() 
+
+**Authors:** [Daniele Castellana](https://danielecastellana22.github.io/) and [Filippo Maria Bianchi](https://sites.google.com/view/filippombianchi/). 
 
 
 ## ⚡ TL;DR
