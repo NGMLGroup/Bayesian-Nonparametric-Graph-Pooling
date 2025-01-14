@@ -1,0 +1,14 @@
+# @package _global_
+
+dataset:
+  family: TUDataset
+  name: IMDB-BINARY
+  hparams:
+    seed: 777
+    n_folds: 10
+    fold_id: 0
+    batch_size: 32
+    transform: ['constant']
+  callbacks:
+    monitor: val_loss
+    mode: min

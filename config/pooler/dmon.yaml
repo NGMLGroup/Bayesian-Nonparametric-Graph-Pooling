@@ -1,0 +1,8 @@
+# @package _global_
+
+pooler:
+  name: dmon
+  hparams:
+    l1_weight: 1.0
+    l2_weight: 0.0 # This loss does not exist in the paper
+    l3_weight: 1.0

@@ -1,0 +1,16 @@
+# @package _global_
+
+dataset:
+  family: TUDataset
+  name: COLORS-3
+  hparams:
+    seed: 777
+    n_folds: 10
+    fold_id: 0
+    batch_size: 64
+    clean: False
+    use_node_attr: True
+    transform: ['labels_to_int']
+  callbacks:
+    monitor: val_acc
+    mode: max

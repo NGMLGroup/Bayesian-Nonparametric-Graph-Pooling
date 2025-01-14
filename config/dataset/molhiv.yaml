@@ -1,0 +1,13 @@
+# @package _global_
+
+dataset:
+  family: OGBDataset
+  name: ogbg-molhiv
+  hparams:
+    seed: 777
+    batch_size: 64
+    num_workers: 11
+    reload: True
+  callbacks:
+    monitor: val_auroc
+    mode: max

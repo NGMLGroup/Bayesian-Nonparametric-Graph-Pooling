@@ -1,0 +1,12 @@
+# @package _global_
+
+lr_scheduler:
+  name: ReduceLROnPlateau
+  hparams:
+    monitor: ${callbacks.monitor}
+    mode: ${callbacks.mode}
+    factor: 0.8
+    patience: 200
+    threshold: 1e-4
+    threshold_mode: abs
+    min_lr: 1e-6

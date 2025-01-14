@@ -1,0 +1,9 @@
+# @package _global_
+
+lr_scheduler:
+  name: CyclicLR
+  hparams:
+    base_lr: 0.0001 #${optimizer.hparams.lr}/10
+    max_lr: 0.001 #${optimizer.hparams.lr},
+    step_size_up: 500
+    cycle_momentum: False

@@ -1,0 +1,15 @@
+# @package _global_
+
+pooler:
+  name: bnpool
+
+  hparams:
+    n_clusters: 50        # Maximum number of clusters
+    n_particles: 1        # number of particles for the stick-breaking prior
+    alpha_DP: 10          # concentration parameter for the Dirichlet Process
+    k_init: 1.0           # the inital value of K has k_init on the diagonal and -k_init on the off-diagonal
+    mu_K: 10.0            # mean prior has k_mu on the diagonal and -k_mu on the off-diagonal
+    sigma_K: 1.0            # prior for the variance of the cluster prob matrix
+    rescale_loss: true    # Whether to rescale the loss by the number of nodes
+    balance_links: true   # Whether to balance the positive links in computing the link reconstruction loss
+    train_K: true         # whether to train the cluster prob matrix

@@ -1,0 +1,6 @@
+# @package _global_
+
+optimizer:
+  name: Adam
+  hparams:
+    lr: 1e-4

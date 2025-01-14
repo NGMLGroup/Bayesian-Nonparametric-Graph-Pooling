@@ -1,0 +1,6 @@
+# @package _global_
+
+pooler:
+  name: topk
+  hparams:
+    ratio: ${architecture.hparams.pool_ratio}

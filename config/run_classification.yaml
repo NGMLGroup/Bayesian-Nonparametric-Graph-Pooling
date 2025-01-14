@@ -1,0 +1,31 @@
+defaults:
+  - default
+  - override dataset: mutag
+  - _self_
+
+#### Experiment params
+plot_preds_at_epoch:
+  set: ['val', 'test']
+  batch: 1
+  samples: 3
+  every: 100
+  types: ['matrix_assignments', 'rec_adj', 'gen_matrix', 'alpha_beta', 'nonempty_clust', 'pooled_graph', 'assignments']
+
+#### Training params
+optimizer:
+  hparams:
+    lr: 1e-3
+
+lr_scheduler:
+  hparams:
+    patience: 150
+
+epochs: 100000
+
+callbacks:
+  patience: 500
+  monitor: ${dataset.callbacks.monitor}
+  mode: ${dataset.callbacks.mode}
+  params_scheduling:
+    activate: true
+    epochs: 300

@@ -1,0 +1,20 @@
+# @package _global_
+
+defaults:
+  - reload_default
+
+dataset:
+  family: PyGSPDataset
+  name: StochasticBlockModel
+  params:
+    N: 300  # Number of nodes
+    k: 5   # Number of communities
+    z: null # vector of length N containing the association between nodes and classes. If null, z = rng.integers(0, k, N)
+    M: null # the k by k matrix containing the probability of connecting nodes based on their class belonging (default using p and q).
+    p: 0.9 # the diagonal value(s) for the matrix M. If scalar they all have the same value. Otherwise expect a length k vector
+    q: 0.01 # the off-diagonal value(s) for the matrix M. If scalar they all have the same value. Otherwise expect a k x k matrix, diagonal will be discarded
+    directed: false # whether the graph is directed or not
+    self_loops: false # whether the graph has self loops or not
+    connected: true # whether the graph is connected or not
+    n_try: 100 # number of tries to generate a connected graph. If none it will try forever
+    seed: 0

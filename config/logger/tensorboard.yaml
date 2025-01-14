@@ -1,0 +1,5 @@
+# @package _global_
+
+logger:
+  backend: tensorboard
+  logdir: ${hydra:runtime.output_dir}

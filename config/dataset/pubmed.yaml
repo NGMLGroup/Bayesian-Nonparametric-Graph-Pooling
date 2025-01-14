@@ -1,0 +1,8 @@
+# @package _global_
+
+dataset:
+  family: Planetoid
+  name: PubMed
+  hparams:
+    split: "public"
+    norm_feats: true

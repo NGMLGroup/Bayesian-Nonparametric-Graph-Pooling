@@ -1,0 +1,7 @@
+# @package _global_
+
+pooler:
+  name: mincut
+  hparams:
+    l1_weight: 1.0
+    l2_weight: 0.5

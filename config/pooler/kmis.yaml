@@ -1,0 +1,7 @@
+# @package _global_
+
+pooler:
+  name: kmis
+  hparams:
+    k: ${round:${div:1,${architecture.hparams.pool_ratio}}}
+    aggr_x: 'sum'

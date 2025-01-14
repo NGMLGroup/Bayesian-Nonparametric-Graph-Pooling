@@ -1,0 +1,47 @@
+defaults:
+  - _self_
+  - logger: tensorboard
+  - dataset: bench-hard
+  - architecture: classification
+  - pooler: bnpool
+  - optimizer: adam
+  - lr_scheduler: redplat
+
+#### Log and sweep params 
+hydra:
+  run:
+    dir: logs/${dataset.name}/${architecture.name}/${pooler.name}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: logs/${now:%Y-%m-%d-%H-%M-%S}
+    subdir: ${dataset.name}/${architecture.name}/${pooler.name}/${hydra.job.num}
+
+#### Experiment params 
+workers: 16
+log_grad_norm: False
+log_lr: True
+
+plot_preds_at_epoch:
+  set: ['train']
+  batch: 0
+  samples: 0
+  every: 100
+  types: []
+
+#### Training params
+epochs: 10000
+limit_train_batches: null
+limit_val_batches: null
+clip_val: 5.0  # Gradient clipping value
+
+callbacks:
+  early_stop: True
+  patience: 300
+  checkpoints: True   # save checkpoints while training
+  monitor: val_loss
+  mode: min
+  params_scheduling: # modify the contribution of the stick-breaking prior loss during training
+    activate: true
+    first_eta: 0
+    last_eta: 1
+    epochs: 5000 # epochs to reach last_eta
+    mode: cosine

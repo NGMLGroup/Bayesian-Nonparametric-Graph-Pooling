@@ -1,103 +1,151 @@
-# {Paper Title} ({Venue} {Year})
+# Bayesian Nonparametric Graph Pooling
 
-[![ICLR](https://img.shields.io/badge/{Venue}-{Year}-blue.svg?)]({Link to paper page})
-[![paper](https://custom-icon-badges.demolab.com/badge/paper-pdf-green.svg?logo=file-text&logoSource=feather&logoColor=white)]({Link to the paper})
+This repository contains the code for the reproducibility of the experiments presented in the paper [BN-Pool: a Bayesian Nonparametric Approach for Graph Pooling](). 
 
-[![poster](https://custom-icon-badges.demolab.com/badge/poster-pdf-orange.svg?logo=note&logoSource=feather&logoColor=white)]({Link to the poster/presentation})
-[![arXiv](https://img.shields.io/badge/arXiv-{Arxiv.ID}-b31b1b.svg?)]({Link to Arixv})
-
-This repository contains the code for the reproducibility of the experiments presented in the paper "{Paper Title}" ({Venue} {Year}). {Paper TL;DR}.
-
-**Authors**: [Author 1]({Author1 webpage}), [Author 2]({Author2 webpage})
-
----
 
 ## ⚡ TL;DR
 
-{Paper description}.
+BNPool is a layer for GNN architectures for graph classification and node clustering.
+BNPool leverages a Bayesian non-parametric approach to dynamically group nodes based on their features, the graph connectivity, and the downstram task at hand **without** pre-specifying the number of clusters beforehand.
+Differently from existing graph pooling approach based on node clustering, BNPool can learn a different number of clusters for each input graph.
 
-<!-- p align=center>
-	<img src="./overview.png" alt="{Image description}"/>
-</p -->
-
----
-
-## 📂 Directory structure
-
-The directory is structured as follows:
-
-```
-.
-├── config/
-│   ├── exp1/
-│   └── exp2/
-├── datasets/
-├── lib/
-├── requirements.txt
-├── conda_env.yaml
-└── experiments/
-    ├── exp1.py
-    └── exp2.py
-
-```
+<p align=center>
+	<img src="./assets/animated.gif" alt="{BNPool training}"/>
+</p>
 
 
-## 📦 Datasets
+## ⚙️ Setup
 
-All datasets are automatically downloaded and stored in the folder `datasets`.
-
-The datasets used in the experiment are provided by [pyg](). Dataset-1 and Dataset-2 datasets are downloaded from these links:
-- [Dataset-1]().
-- [Dataset-2]().
-
-### New dataset (optional)
-
-In this paper, we introduce a novel dataset {Name of dataset}.
-
-{Dataset TL;DR}.
-
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.{DOI}.svg)]({Link to dataset repository})
-
-
-## ⚙️ Configuration files
-
-The `config` directory stores all the configuration files used to run the experiment. They are divided into subdirectories according to the experiment they refer to.
-
-## 📝 Requirements
-
-We run all the experiments in `python 3.XX`. To solve all dependencies, we recommend using Anaconda and the provided environment configuration by running the command:
+To install the required packages, create a conda environment using the provided environment file:
 
 ```bash
-conda env create -f conda_env.yml
-conda activate env_name
+conda env create -f environment.yml
+conda activate bnpool
 ```
 
-Alternatively, you can install all the requirements listed in `requirements.txt` with pip:
+So far, the environment has been tested on:
+- Linux (Ubuntu >= 20.0)
+- Windows 11 (Versione 10.0.26100)
+
+## ⏱ Quick start
+
+The file [minimal_example.py](./minimal_example.py) is a self-contained script that showcases:
+
+- Integration with PyTorch Geometric.
+- How to build a simple GNN for graph classification that uses BN-Pool.
+- Training and evaluation on a sample dataset.
+
+To run the file execute:
 
 ```bash
-pip install -r requirements.txt
+python minimal_example.py
 ```
-
-## 📚 Library
-
-The support code, including the models and the datasets readers, are packed in a python library named `lib`. Should you have to change the paths to the datasets location, you have to edit the `__init__.py` file of the library.
-
 
 ## 🧪 Experiments
 
-The scripts used for the experiments in the paper are in the `experiments` folder.
+BN-Pool can be used within GNNs for node clustering and graph classification.
 
-* `exp1.py` is used to ... . An example of usage is
+To reproduce the node clustering experiment run:
 
 ```bash
-python experiments/exp1 --config exp1/config.yaml args
+python run_clustering.py
 ```
 
+To reproduce the graph classification experiment run:
 
-## 📖 Bibtex reference
+```bash
+python run_classification.py
+```
+
+### 📝 Config files
+
+Each script uses [Hydra](https://hydra.cc/) for configuration management. 
+The corresponding YAML config files can be found in the `config` directory. 
+You can override any configuration parameter from the CLI, for example:
+
+```bash
+python run_classification.py dataset=bench-hard pooler=mincut epochs=100 optimizer.hparams.lr=1e-4
+```
+
+will launch the graph classification script on the `enzymes` dataset, using a GNN configured with the `mincut` layer, trained only for `100` epochs, using a learning rate of `1e-4` in the optimizer.
+
+To test the execution of all the available pooling methods and datasets for node clustering launch the command:
+
+```bash
+python run_clustering.py --config-name=test_clustering -m
+```
+
+To do the same for graph clustering launch the command:
+
+```bash
+python run_classification.py --config-name=test_classification -m
+```
+
+> [!Warning]
+> This might take some time and a few datasets require a GPU with more than 24GB of VRAM.
+
+## 📂 Project structure
+
+This repository is structured as follows:
+
+```
+./
+├── config/                     # Hydra configuration files
+├── source/                     # Directory with the scripts
+│   ├── data/                   # Dataset handling scripts
+│   ├── layers/                 # Neural network layers
+│   │   ├── edgepool/           # EdgePool implementation
+│   │   ├── kmis/               # KMIS implementation
+│   │   ├── just_balance.py     # JBGNN implementation
+│   │   ├── sum_pool.py         # A simple node aggregator
+│   │   └── bnpool.py           # BN-Pool implementation
+│   ├── models/                 # GNN architectures (torch models)
+│   ├── pl_modules/             # PyTorch Lightning modules
+│   └── utils/                  # Utility functions
+├── minimal_example.py          # Quick start example
+├── run_classification.py       # Graph classification runner
+├── run_clustering.py           # Node clustering runner
+├── environment.yml             # Conda environment specification
+├── README.md                   # This README file
+└── LICENSE                     # MIT License
+
+```
+
+- The file `layers/bnpool.py` provides the implementation of the BN-Pool layer. 
+
+- The folder `layers/` also contains the implementation of other layers not available in PyG.
+
+- The folder `/models` contains the GNN architectures for node classification and clustering. These are torch models.
+
+- The folder `/pl_modules` contain the different Lighnting modules that handle training and logging of the different models.
+
+- The folder `/data` contains all the script for dowloading and processing the datasets.
+
+- The folder `/utils` contains several utilities functions used for training, processing data, handling config files, or logging.
+
+## 📦 Datasets
+
+All datasets are automatically downloaded and stored in the folder `data`.
+
+The datasets used in the experiments are:
+- Several [TUDatasets](https://chrsmrrs.github.io/datasets/).
+- The dataset `molhiv` from [OGB](https://ogb.stanford.edu/docs/graphprop/).
+- The `community` graph built uisng [PyGSP](https://pygsp.readthedocs.io/en/stable/).
+- The `bench-hard` dataset from [GCB](https://github.com/FilippoMB/Benchmark_dataset_for_graph_classification).
+
+
+## 📚  Bibtex reference
 
 If you find this code useful please consider to cite our paper:
 
 ```bibtex
-{Bibtex reference}
+@misc{castellana2025bnpool,
+      title={BN-Pool: a Bayesian Nonparametric Approach for Graph Pooling}, 
+      author={Daniele Castellana and Filippo Maria Bianchi},
+      year={2025},
+      eprint={},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={}, 
+}
 ```

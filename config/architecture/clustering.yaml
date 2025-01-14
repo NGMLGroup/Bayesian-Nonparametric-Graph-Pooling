@@ -1,0 +1,10 @@
+# @package _global_
+
+architecture:
+  name: clustering
+  hparams:
+    num_layers_pre: 2
+    hidden_channels: 32
+    activation: elu
+    pool_ratio: 5
+    use_cache: true

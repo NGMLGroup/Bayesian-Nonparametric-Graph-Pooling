@@ -1,0 +1,5 @@
+# @package _global_
+
+pooler:
+  name: nopool
+  hparams: null  

@@ -1,0 +1,15 @@
+defaults:
+  - run_classification
+  - override hydra/sweeper: basic 
+  - _self_
+
+plot_preds_at_epoch:
+  types: [] 
+
+epochs: 10
+
+hydra:
+  sweeper:
+    params:
+      dataset: bench-hard, collab, colors, imdb-b, mutagenicity, NCI1, reddit-b, dd, mutag, enzymes, proteins, molhiv
+      pooler: bnpool, mincut, diffpool, dmon, justbalance, graclus, edgepool, kmis, topk

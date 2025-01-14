@@ -1,0 +1,15 @@
+defaults:
+  - run_clustering
+  - override hydra/sweeper: basic 
+  - _self_
+
+plot_preds_at_epoch:
+  types: [] 
+
+epochs: 10
+
+hydra:
+  sweeper:
+    params:
+      dataset: community, cora, dblp, citeseer, pubmed
+      pooler: bnpool, mincut, diffpool, dmon, justbalance

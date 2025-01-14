@@ -1,0 +1,6 @@
+# @package _global_
+
+pooler:
+  name: just_balance
+  hparams:
+    normalize: true

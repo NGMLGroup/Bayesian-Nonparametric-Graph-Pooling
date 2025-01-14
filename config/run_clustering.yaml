@@ -1,0 +1,24 @@
+defaults:
+  - default
+  - override dataset: community
+  - override architecture: clustering
+  - _self_
+
+optimizer:
+  hparams:
+    lr: 5e-3
+
+batch_size: 1
+epochs: 10000
+
+callbacks:
+  patience: 300
+  monitor: train_loss
+  mode: min
+
+plot_preds_at_epoch:
+  set: ['train', 'test']
+  batch: 0
+  samples: 0
+  every: 500
+  types: ['matrix_assignments', 'rec_adj', 'gen_matrix', 'alpha_beta']

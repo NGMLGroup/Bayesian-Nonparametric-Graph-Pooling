@@ -1,0 +1,13 @@
+# @package _global_
+
+defaults:
+  - adam
+  - cosine
+
+optimizer:
+  hparams: 
+    lr: 0.01
+
+lr_scheduler:
+  hparams: 
+    eta_min: 0.0

@@ -1,0 +1,8 @@
+# @package _global_
+
+optimizer:
+  name: SGD
+  hparams:
+    lr: 1e-2
+    momentum: 0.9
+    weight_decay: 0.0005

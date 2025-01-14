@@ -1,0 +1,6 @@
+# @package _global_
+
+pooler:
+  name: graclus
+  hparams:
+    ratio: ${architecture.hparams.pool_ratio}

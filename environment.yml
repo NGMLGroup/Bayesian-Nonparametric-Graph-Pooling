@@ -1,0 +1,32 @@
+name: bnpool
+channels:
+  - pytorch
+  - pyg
+  - nvidia                    # remove for cpu installation
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.11
+  - numpy<2
+  - matplotlib
+  - seaborn
+  - pytorch>=2.1.0
+  - pytorch-cuda=12.1         # remove for cpu installation
+  - pyg
+  - pytorch-cluster
+  - pytorch-scatter
+  - pytorch-sparse
+  - lightning
+  - numba
+  - scikit-learn
+  - pip
+  - pip:
+      - einops
+      - hydra-core
+      - hydra-joblib-launcher
+      - omegaconf
+      - ogb
+      - tensorboard
+      - torch-tb-profiler
+      # From source
+      - git+https://github.com/gsp-eeg/pygsp2

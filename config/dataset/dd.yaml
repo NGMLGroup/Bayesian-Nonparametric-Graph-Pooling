@@ -1,0 +1,13 @@
+# @package _global_
+
+dataset:
+  family: TUDataset
+  name: DD
+  hparams:
+    seed: 777
+    n_folds: 10
+    fold_id: 0
+    batch_size: 32
+  callbacks:
+    monitor: val_loss
+    mode: min
