@@ -1,8 +1,8 @@
 # Bayesian Nonparametric Graph Pooling
 
-![arXiv](https://img.shields.io/badge/arXiv-{Arxiv.ID}-b31b1b.svg?)
+[![arXiv](https://img.shields.io/badge/arXiv-2501.09821-b31b1b.svg?)](https://arxiv.org/abs/2501.09821)
 
-This repository contains the code for the reproducibility of the experiments presented in the paper [BN-Pool: a Bayesian Nonparametric Approach for Graph Pooling]() 
+This repository contains the code for the reproducibility of the experiments presented in the paper [BN-Pool: a Bayesian Nonparametric Approach for Graph Pooling](https://arxiv.org/abs/2501.09821).
 
 **Authors:** [Daniele Castellana](https://danielecastellana22.github.io/) and [Filippo Maria Bianchi](https://sites.google.com/view/filippombianchi/). 
 
@@ -18,7 +18,7 @@ Differently from existing graph pooling approach based on node clustering, BNPoo
 </p>
 
 
-## ⚙️ Setup
+## 🛠️ Setup
 
 To install the required packages, create a conda environment using the provided environment file:
 
@@ -31,7 +31,7 @@ So far, the environment has been tested on:
 - Linux (Ubuntu >= 20.0)
 - Windows 11 (Versione 10.0.26100)
 
-## ⏱ Quick start
+## 🚀 Quick start
 
 The file [minimal_example.py](./minimal_example.py) is a self-contained script that showcases:
 
@@ -144,12 +144,12 @@ If you find this code useful please consider to cite our paper:
 
 ```bibtex
 @misc{castellana2025bnpool,
-      title={BN-Pool: a Bayesian Nonparametric Approach for Graph Pooling}, 
+      title={BN-Pool: a Bayesian Nonparametric Approach to Graph Pooling}, 
       author={Daniele Castellana and Filippo Maria Bianchi},
       year={2025},
-      eprint={},
+      eprint={2501.09821},
       archivePrefix={arXiv},
       primaryClass={cs.LG},
-      url={}, 
+      url={https://arxiv.org/abs/2501.09821}, 
 }
 ```
