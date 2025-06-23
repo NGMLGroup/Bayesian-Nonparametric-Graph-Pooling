@@ -129,7 +129,7 @@ class BNPool(nn.Module):
 
         # Compute the losses
         rec_loss = self.dense_rec_loss(S, adj, pos_weight)   # has shape P x B x N x N
-        kl_loss = self.eta * self.pi_prior_loss(q_z)  # has shape B x N
+        kl_loss = self.pi_prior_loss(q_z)  # has shape B x N
 
         K_prior_loss = self.K_prior_loss() if self.train_K else 0  # has shape 1
         
