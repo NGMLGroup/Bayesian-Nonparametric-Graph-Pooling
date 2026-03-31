@@ -1,0 +1,12 @@
+# @package _global_
+
+dataset:
+  family: LRGBDataset
+  name: peptides-struct
+  hparams:
+    seed: 777
+    batch_size: 32
+    num_workers: 11
+  callbacks:
+    monitor: val_mae
+    mode: min

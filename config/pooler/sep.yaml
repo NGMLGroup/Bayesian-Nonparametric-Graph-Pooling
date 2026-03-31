@@ -1,5 +1,5 @@
 # @package _global_
 
 pooler:
-  name: graclus
+  name: sep
   hparams: {}

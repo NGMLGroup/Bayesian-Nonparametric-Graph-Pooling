@@ -33,7 +33,7 @@ class CoefficientScheduler(pl.Callback):
             self.eta_scheduler = CosineScheduler(first_eta, last_eta, epochs)
 
     def on_train_epoch_start(self, trainer, model):
-        if model.model.pooler in ['baypool']:
+        if model.model.pooler == 'bnpool':
             # Log and update coefficients
             eta = self.eta_scheduler(trainer.current_epoch)  # Calculate coefficients
             model.model.pool.eta = eta          # Update coefficients in model

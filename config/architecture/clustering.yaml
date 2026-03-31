@@ -7,4 +7,3 @@ architecture:
     hidden_channels: 32
     activation: elu
     pool_ratio: 5
-    use_cache: true

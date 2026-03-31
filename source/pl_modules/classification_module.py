@@ -1,261 +1,296 @@
-from typing import Optional, Mapping, Type
+from typing import Mapping, Optional, Type
+
 import torch
 import torchmetrics
-from torchmetrics.classification import Accuracy, MulticlassF1Score, MulticlassAUROC
-from source.utils import NonEmptyClusterTracker
+from torchmetrics.classification import (
+    Accuracy,
+    AveragePrecision,
+    MulticlassAUROC,
+    MulticlassF1Score,
+)
+
+from source.utils import ClusterOccupancyTracker, NonEmptyClusterTracker
 
 from .base_module import BaseModule
 
 
-class ClassificationModule(BaseModule):
-    def __init__(self,
-                 model: Optional[torch.nn.Module] = None,
-                 optim_class: Optional[Type] = None,
-                 optim_kwargs: Optional[Mapping] = None,
-                 scheduler_class: Optional[Type] = None,
-                 scheduler_kwargs: Optional[Mapping] = None,
-                 log_lr: bool = True,
-                 log_grad_norm: bool = False,
-                 plot_dict: Optional[Mapping] = None
-                 ):
-        super().__init__(optim_class, optim_kwargs, scheduler_class, scheduler_kwargs,
-                         log_lr, log_grad_norm)
+class BaseClassificationModule(BaseModule):
+    def __init__(
+        self,
+        model: Optional[torch.nn.Module] = None,
+        optim_class: Optional[Type] = None,
+        optim_kwargs: Optional[Mapping] = None,
+        scheduler_class: Optional[Type] = None,
+        scheduler_kwargs: Optional[Mapping] = None,
+        log_lr: bool = True,
+        log_grad_norm: bool = False,
+    ):
+        super().__init__(
+            optim_class,
+            optim_kwargs,
+            scheduler_class,
+            scheduler_kwargs,
+            log_lr,
+            log_grad_norm,
+        )
 
-        self.model = model 
-        self.plot_preds_at_epoch = plot_dict
-        self.loss = torch.nn.CrossEntropyLoss()
-        self.train_metrics = torchmetrics.MetricCollection({
-            'train_acc': Accuracy(task='multiclass', num_classes=model.num_classes),
-            'train_f1': MulticlassF1Score(num_classes=model.num_classes, average='macro'),
-            'train_auroc': MulticlassAUROC(num_classes=model.num_classes),
-            })
-        self.val_metrics = torchmetrics.MetricCollection({
-            'val_acc': Accuracy(task='multiclass', num_classes=model.num_classes),
-            'val_f1': MulticlassF1Score(num_classes=model.num_classes, average='macro'),
-            'val_auroc': MulticlassAUROC(num_classes=model.num_classes),
-            })
-        self.test_metrics = torchmetrics.MetricCollection({
-            'test_acc': Accuracy(task='multiclass', num_classes=model.num_classes),
-            'test_f1': MulticlassF1Score(num_classes=model.num_classes, average='macro'),
-            'test_auroc': MulticlassAUROC(num_classes=model.num_classes),
-            })
-        
-        if self.model.pooler == 'bnpool': # Tracks the number of non-empty clusters
-            self.non_empty_tracker_tr = NonEmptyClusterTracker() 
-            self.non_empty_tracker_val = NonEmptyClusterTracker() 
-            self.non_empty_tracker_test = NonEmptyClusterTracker() 
-        
+        self.model = model
+        self.init_metrics()
+        self.track_cluster_occupancy = self.model.pooler == 'bnpool' and self.model.pool.batched
 
-    def maybe_log_histogram(self, counts, istest=False, n_bins=50):
-        """
-        Log histogram of the number of non-empty clusters.
-        This function is here instead of in maybe_log_stuff from the base class
-        because is called at epoch end
-        """
+        if self.track_cluster_occupancy:
+            n_clusters = self.model.pool.k
+            self.non_empty_tracker_tr = NonEmptyClusterTracker(n_clusters)
+            self.non_empty_tracker_val = NonEmptyClusterTracker(n_clusters)
+            self.non_empty_tracker_test = NonEmptyClusterTracker(n_clusters)
+            self.clust_occup_tracker_tr = ClusterOccupancyTracker(n_clusters)
+            self.clust_occup_tracker_val = ClusterOccupancyTracker(n_clusters)
+            self.clust_occup_tracker_test = ClusterOccupancyTracker(n_clusters)
 
-        if self.plot_preds_at_epoch is not None:
-            every = self.plot_preds_at_epoch.get('every', 1)  
+    def init_metrics(self):
+        raise NotImplementedError
 
-            if self.current_epoch%every==0 or istest:
+    def compute_clf_loss(self, logits, labels):
+        return self.loss(logits, labels)
 
-                import matplotlib.pyplot as plt
-                import numpy as np
-                f, ax = plt.subplots(figsize=(10, 4))
-                ax.hist(counts.cpu().numpy(), 
-                        bins=n_bins,
-                        range=(0, n_bins),
-                        edgecolor='black',
-                        linewidth=1.2,
-                        color='cornflowerblue',
-                        alpha=0.7,
-                        rwidth=0.85)
+    def update_metrics(self, stage, logits, labels):
+        metrics = getattr(self, f'{stage}_metrics', None)
+        if metrics is not None:
+            metrics.update(logits, labels)
 
-                ax.grid(True, alpha=0.3, linestyle='--')
-                ax.set_xlabel('Number of Non-Empty Clusters')
-                ax.set_ylabel('Frequency')
-                ax.set_title('Distribution of Non-Empty Clusters')
+    def log_metrics_epoch(self, stage):
+        metrics = getattr(self, f'{stage}_metrics', None)
+        if metrics is None:
+            return
 
-                ax.spines['top'].set_visible(False)
-                ax.spines['right'].set_visible(False)
-                ax.spines['left'].set_linewidth(1.2)
-                ax.spines['bottom'].set_linewidth(1.2)
+        values = metrics.compute()
+        for name, value in values.items():
+            self.log(name, value)
+        metrics.reset()
 
-                ax.set_xticks(np.arange(n_bins) + 0.5)
-                ax.set_xticklabels([str(i) if i % 5 == 0 else '' for i in np.arange(n_bins)])
+    def _log_cluster_metrics(self, stage, counts, occupancies):
+        if counts.numel() == 0:
+            return
 
-                plt.tight_layout()
-                self.logger.log_figure(f, 'nonempty_clust', global_step=self.global_step)
-                plt.close(f)
+        self.log(
+            f'{stage}_nonempty_clust_mean',
+            counts.mean(),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+        )
+        self.log(
+            f'{stage}_nonempty_clust_std',
+            counts.std(unbiased=False),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+        )
+        self.log(
+            f'{stage}_clust_occupancy',
+            (occupancies > (1.0 / self.model.pool.k)).sum().float(),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+        )
 
+    def _track_clusters(self, stage, clust_occup):
+        stage_key = 'tr' if stage == 'train' else stage
+        getattr(self, f'non_empty_tracker_{stage_key}').update(clust_occup)
+        getattr(self, f'clust_occup_tracker_{stage_key}').update(clust_occup)
+
+    def _flush_cluster_metrics(self, stage):
+        stage_key = 'tr' if stage == 'train' else stage
+        counts = getattr(self, f'non_empty_tracker_{stage_key}').compute()
+        occupancies = getattr(self, f'clust_occup_tracker_{stage_key}').compute()
+        getattr(self, f'non_empty_tracker_{stage_key}').reset()
+        getattr(self, f'clust_occup_tracker_{stage_key}').reset()
+        self._log_cluster_metrics(stage, counts, occupancies)
 
     def forward(self, data):
-        """
-        ⏩ 
-        """
-        logits, pooled_adj, edge_weight, pooled_batch, s, aux_loss, loss_d, nonempty_clust = self.model(data)
+        logits, aux_loss, loss_d, clust_occup = self.model(data)
+        return logits, aux_loss, loss_d, clust_occup
 
-        return logits, pooled_adj, pooled_batch, s, aux_loss, loss_d, nonempty_clust
-    
+    def _shared_step(self, batch, batch_idx, stage):
+        logits, aux_loss, loss_d, clust_occup = self.forward(batch)
+        clf_loss = self.compute_clf_loss(logits, batch.y)
+        loss = clf_loss + aux_loss
+
+        self.log(
+            f'{stage}_clf_loss',
+            clf_loss,
+            batch_size=batch.y.size(0),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+        )
+        self.log(
+            f'{stage}_aux_loss',
+            aux_loss,
+            batch_size=batch.y.size(0),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=True,
+        )
+        self.log(
+            f'{stage}_loss',
+            loss,
+            batch_size=batch.y.size(0),
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+        )
+        self.update_metrics(stage, logits, batch.y)
+
+        if self.model.pooler == 'bnpool':
+            if stage == 'train':
+                self.log(
+                    'eta',
+                    self.model.pool.eta,
+                    batch_size=batch.y.size(0),
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=False,
+                )
+            if loss_d is not None and stage in ['train', 'val']:
+                self.log(
+                    f'{stage}_quality',
+                    loss_d['quality'],
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                    batch_size=batch.batch_size,
+                )
+                self.log(
+                    f'{stage}_kl',
+                    loss_d['kl'],
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                    batch_size=batch.batch_size,
+                )
+                self.log(
+                    'K_prior',
+                    loss_d['K_prior'],
+                    on_step=False,
+                    on_epoch=True,
+                    prog_bar=True,
+                    batch_size=batch.batch_size,
+                )
+            if self.track_cluster_occupancy and clust_occup is not None:
+                self._track_clusters(stage, clust_occup)
+
+        return loss
 
     def training_step(self, batch, batch_idx):
-        """
-        🐾
-        """
-        logits, pooled_adj, pooled_batch, s, aux_loss, loss_d, nonempty_clust = self.forward(batch)
-        clf_loss = self.loss(logits, batch.y)
-        loss = clf_loss + aux_loss
-
-        # Log losses and metrics
-        self.train_metrics.update(logits, batch.y)
-        self.log('train_clf_loss', clf_loss, batch_size=batch.y.size(0),
-                 on_step=False, on_epoch=True, prog_bar=True)
-        self.log('train_aux_loss', aux_loss, batch_size=batch.y.size(0),
-                 on_step=False, on_epoch=True, prog_bar=True)
-        self.log('train_loss', loss, batch_size=batch.y.size(0),
-                 on_step=False, on_epoch=True, prog_bar=False)
-        if self.model.pooler == 'bnpool':
-            self.log('eta', self.model.pool.eta, batch_size=batch.y.size(0),
-                    on_step=False, on_epoch=True, prog_bar=False)
-            self.log('train_quality', loss_d['quality'], on_step=False, on_epoch=True, 
-                    prog_bar=True, batch_size=batch.batch_size)
-            self.log('train_kl', loss_d['kl'], on_step=False, on_epoch=True, 
-                    prog_bar=True, batch_size=batch.batch_size)
-            self.log('K_prior', loss_d['K_prior'], on_step=False, on_epoch=True,
-                     prog_bar=True, batch_size=batch.batch_size)
-            self.non_empty_tracker_tr.update(nonempty_clust.sum(axis=-1))
-        
-        # Log images and artifacts
-        if 'train' in self.plot_preds_at_epoch['set']:
-            if self.logger is not None:
-                if self.logger.cfg.logger.backend in ['tensorboard']:
-                    self.maybe_log_stuff(batch=batch, batch_idx=batch_idx, 
-                                         pooled_adj=pooled_adj, pooled_batch=pooled_batch, 
-                                         s=s, plot_type=self.plot_preds_at_epoch['types'], 
-                                         istest=False)
-
-        return {'loss':loss}
-    
-
-    def on_train_epoch_end(self):
-        """
-        🏁
-        """
-        train_ = self.train_metrics.compute()
-        self.log('train_acc', train_['train_acc'])
-        self.log('train_f1', train_['train_f1'])
-        self.log('train_auroc', train_['train_auroc'])
-        self.train_metrics.reset()
-
-        if self.model.pooler == 'bnpool':
-            counts = self.non_empty_tracker_tr.compute()
-            self.non_empty_tracker_tr.reset()
-
-            if 'train' in self.plot_preds_at_epoch['set']:
-                if self.logger is not None:
-                    if self.logger.cfg.logger.backend in ['tensorboard']:
-                        if 'nonempty_clust' in self.plot_preds_at_epoch['types']:
-                            self.maybe_log_histogram(counts, istest=False)
-
+        loss = self._shared_step(batch, batch_idx, 'train')
+        return {'loss': loss}
 
     def validation_step(self, batch, batch_idx):
-        """
-        🐾
-        """
-        logits, pooled_adj, pooled_batch, s, aux_loss, loss_d, nonempty_clust = self.forward(batch)
-        clf_loss = self.loss(logits, batch.y)
-        loss = clf_loss + aux_loss
-
-        # Log losses and metrics
-        self.val_metrics.update(logits, batch.y)
-        self.log('val_clf_loss', clf_loss, batch_size=batch.y.size(0),
-                 on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_aux_loss', aux_loss, batch_size=batch.y.size(0),
-                 on_step=False, on_epoch=True, prog_bar=True)
-        self.log('val_loss', loss, batch_size=batch.y.size(0),
-                 on_step=False, on_epoch=True, prog_bar=False)
-        if self.model.pooler == 'bnpool':
-            self.log('val_quality', loss_d['quality'], on_step=False, on_epoch=True, 
-                    prog_bar=True, batch_size=batch.batch_size)
-            self.log('val_kl', loss_d['kl'], on_step=False, on_epoch=True,
-                    prog_bar=True, batch_size=batch.batch_size)
-            self.log('K_prior', loss_d['K_prior'], on_step=False, on_epoch=True,
-                     prog_bar=True, batch_size=batch.batch_size)
-            self.non_empty_tracker_val.update(nonempty_clust.sum(axis=-1))
-
-        # Log images and artifacts
-        if 'val' in self.plot_preds_at_epoch['set']:
-            if self.logger is not None:
-                if self.logger.cfg.logger.backend in ['tensorboard']:
-                    self.maybe_log_stuff(batch=batch, batch_idx=batch_idx, 
-                                         pooled_adj=pooled_adj, pooled_batch=pooled_batch, 
-                                         s=s, plot_type=self.plot_preds_at_epoch['types'], 
-                                         istest=False)
-
-        return {'val_loss':loss}
-    
-
-    def on_validation_epoch_end(self):
-        """
-        🏁
-        """
-        val_ = self.val_metrics.compute()
-        self.log('val_acc', val_['val_acc'])
-        self.log('val_f1', val_['val_f1'])
-        self.log('val_auroc', val_['val_auroc'])
-        self.val_metrics.reset()
-
-        if self.model.pooler == 'bnpool':
-            counts = self.non_empty_tracker_val.compute()
-            self.non_empty_tracker_val.reset()
-            if 'val' in self.plot_preds_at_epoch['set']:
-                if self.logger is not None:
-                    if self.logger.cfg.logger.backend in ['tensorboard']:
-                        if 'nonempty_clust' in self.plot_preds_at_epoch['types']:
-                            self.maybe_log_histogram(counts, istest=False)
-        
+        loss = self._shared_step(batch, batch_idx, 'val')
+        return {'val_loss': loss}
 
     def test_step(self, batch, batch_idx):
-        """
-        🧪
-        """
-        logits, pooled_adj, pooled_batch, s, aux_loss, _, nonempty_clust = self.forward(batch)
-        clf_loss = self.loss(logits, batch.y)
-        loss = clf_loss + aux_loss
+        loss = self._shared_step(batch, batch_idx, 'test')
+        return {'test_loss': loss}
 
-        # Log losses and metrics
-        self.test_metrics.update(logits, batch.y)
-        self.log('test_clf_loss', clf_loss, batch_size=batch.y.size(0))
-        self.log('test_aux_loss', aux_loss, batch_size=batch.y.size(0))
-        self.log('test_loss', loss, batch_size=batch.y.size(0))
-        if self.model.pooler == 'bnpool':
-            self.non_empty_tracker_test.update(nonempty_clust.sum(axis=-1))
-        
-        # Log images and artifacts
-        if 'test' in self.plot_preds_at_epoch['set']:
-            if self.logger is not None:
-                if self.logger.cfg.logger.backend in ['tensorboard']:
-                    self.maybe_log_stuff(batch=batch, batch_idx=batch_idx, 
-                                         pooled_adj=pooled_adj, pooled_batch=pooled_batch, 
-                                         s=s, plot_type=self.plot_preds_at_epoch['types'], 
-                                         istest=True)
+    def on_train_epoch_end(self):
+        self.log_metrics_epoch('train')
+        if self.track_cluster_occupancy:
+            self._flush_cluster_metrics('train')
 
-        return {'test_loss':loss}
-    
+    def on_validation_epoch_end(self):
+        self.log_metrics_epoch('val')
+        if self.track_cluster_occupancy:
+            self._flush_cluster_metrics('val')
 
     def on_test_epoch_end(self):
-        """
-        🏁
-        """
-        test_ = self.test_metrics.compute()
-        self.log('test_acc', test_['test_acc'])
-        self.log('test_f1', test_['test_f1'])
-        self.log('test_auroc', test_['test_auroc'])
+        self.log_metrics_epoch('test')
+        if self.track_cluster_occupancy:
+            self._flush_cluster_metrics('test')
 
-        if self.model.pooler == 'bnpool':
-            counts = self.non_empty_tracker_test.compute()
-            self.non_empty_tracker_test.reset()
-            if 'test' in self.plot_preds_at_epoch['set']:
-                if self.logger is not None:
-                    if self.logger.cfg.logger.backend in ['tensorboard']:
-                        if 'nonempty_clust' in self.plot_preds_at_epoch['types']:
-                            self.maybe_log_histogram(counts, istest=True)
+
+class ClassificationModule(BaseClassificationModule):
+    def init_metrics(self):
+        self.loss = torch.nn.CrossEntropyLoss()
+        self.train_metrics = torchmetrics.MetricCollection({
+            'train_acc': Accuracy(task='multiclass', num_classes=self.model.num_classes),
+            'train_f1': MulticlassF1Score(num_classes=self.model.num_classes, average='macro'),
+            'train_auroc': MulticlassAUROC(num_classes=self.model.num_classes),
+        })
+        self.val_metrics = torchmetrics.MetricCollection({
+            'val_acc': Accuracy(task='multiclass', num_classes=self.model.num_classes),
+            'val_f1': MulticlassF1Score(num_classes=self.model.num_classes, average='macro'),
+            'val_auroc': MulticlassAUROC(num_classes=self.model.num_classes),
+        })
+        self.test_metrics = torchmetrics.MetricCollection({
+            'test_acc': Accuracy(task='multiclass', num_classes=self.model.num_classes),
+            'test_f1': MulticlassF1Score(num_classes=self.model.num_classes, average='macro'),
+            'test_auroc': MulticlassAUROC(num_classes=self.model.num_classes),
+        })
+
+
+class MultiClassificationModule(BaseClassificationModule):
+    def init_metrics(self):
+        self.loss = torch.nn.BCEWithLogitsLoss()
+        self.train_metrics = torchmetrics.MetricCollection({
+            'train_ap': AveragePrecision(
+                task='multilabel',
+                num_labels=self.model.num_classes,
+                average='macro',
+            ),
+        })
+        self.val_metrics = torchmetrics.MetricCollection({
+            'val_ap': AveragePrecision(
+                task='multilabel',
+                num_labels=self.model.num_classes,
+                average='macro',
+            ),
+        })
+        self.test_metrics = torchmetrics.MetricCollection({
+            'test_ap': AveragePrecision(
+                task='multilabel',
+                num_labels=self.model.num_classes,
+                average='macro',
+            ),
+        })
+
+    def _filter_valid_rows(self, logits, labels):
+        labels = labels.float()
+        if labels.dim() == 1:
+            valid_rows = ~torch.isnan(labels)
+        else:
+            valid_rows = ~torch.isnan(labels).any(dim=-1)
+        return logits[valid_rows], labels[valid_rows]
+
+    def compute_clf_loss(self, logits, labels):
+        logits, labels = self._filter_valid_rows(logits, labels)
+        if logits.numel() == 0:
+            return logits.sum() * 0
+        return self.loss(logits, labels)
+
+    def update_metrics(self, stage, logits, labels):
+        logits, labels = self._filter_valid_rows(logits, labels)
+        if logits.numel() == 0:
+            return
+        super().update_metrics(stage, logits, labels.long())
+
+
+class RegressionModule(BaseClassificationModule):
+    def init_metrics(self):
+        self.loss = torch.nn.MSELoss()
+        self.train_metrics = torchmetrics.MetricCollection({
+            'train_mae': torchmetrics.MeanAbsoluteError(),
+        })
+        self.val_metrics = torchmetrics.MetricCollection({
+            'val_mae': torchmetrics.MeanAbsoluteError(),
+        })
+        self.test_metrics = torchmetrics.MetricCollection({
+            'test_mae': torchmetrics.MeanAbsoluteError(),
+        })
+
+    def compute_clf_loss(self, logits, labels):
+        return self.loss(logits, labels.float())
+
+    def update_metrics(self, stage, logits, labels):
+        super().update_metrics(stage, logits, labels.float())

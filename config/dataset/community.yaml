@@ -1,8 +1,5 @@
 # @package _global_
 
-defaults:
-  - reload_default
-
 dataset:
   family: PyGSPDataset
   name: Community

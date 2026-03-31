@@ -86,20 +86,27 @@ class NonEmptyClusterTracker(Metric):
     """
     Track the sum of non-empty clusters over all batches.
     """
-    def __init__(self):
+    def __init__(self, n_clusters=None):
         super().__init__()
+        self.eps = None if n_clusters is None else 1.0 / n_clusters
         self.add_state("non_empty_counts", default=torch.tensor([], dtype=torch.float), dist_reduce_fx="cat")
 
-    def update(self, nonempty_clust_sum):
+    def update(self, nonempty_clust):
         """
         Update the metric states with the current batch data.
 
         Args:
-            nonempty_clust_sum (torch.Tensor): Sum of non-empty clusters in the current batch,
-            obtained by summing along the last axis of the non-empty cluster tensor.
+            nonempty_clust (torch.Tensor): Either per-graph counts or a cluster-occupancy
+            tensor with shape `(batch, nodes, clusters)`.
         """
-        if not isinstance(nonempty_clust_sum, torch.Tensor):
-            nonempty_clust_sum = torch.tensor(nonempty_clust_sum, dtype=torch.float)
+        if not isinstance(nonempty_clust, torch.Tensor):
+            nonempty_clust = torch.tensor(nonempty_clust, dtype=torch.float)
+
+        if nonempty_clust.dim() >= 3:
+            eps = 0.0 if self.eps is None else self.eps
+            nonempty_clust_sum = torch.any(nonempty_clust > eps, dim=1).sum(-1)
+        else:
+            nonempty_clust_sum = nonempty_clust.to(dtype=torch.float)
         
         # Concatenate the incoming batch sum to the running tensor
         self.non_empty_counts = torch.cat((self.non_empty_counts, nonempty_clust_sum))
@@ -126,4 +133,33 @@ class NonEmptyClusterTracker(Metric):
         Reset to empty tensor.
         """
         self.non_empty_counts = self.non_empty_counts.new_empty(0)
+        super().reset()
+
+
+class ClusterOccupancyTracker(Metric):
+    def __init__(self, n_clusters):
+        super().__init__()
+        self.add_state("clust_occup", default=torch.zeros(n_clusters, dtype=torch.float), dist_reduce_fx="sum")
+
+    def update(self, clust_occup):
+        if not isinstance(clust_occup, torch.Tensor):
+            clust_occup = torch.tensor(clust_occup, dtype=torch.float)
+
+        self.clust_occup += clust_occup.mean(dim=1).sum(0)
+
+    def compute(self):
+        if self.clust_occup.numel() == 0:
+            return torch.empty(0, dtype=torch.float, device=self.clust_occup.device)
+
+        if self.clust_occup.dim() > 1:
+            self.clust_occup = self.clust_occup.view(-1)
+
+        total = self.clust_occup.sum()
+        if total == 0:
+            return torch.zeros_like(self.clust_occup)
+
+        return self.clust_occup / total
+
+    def reset(self):
+        self.clust_occup = torch.zeros_like(self.clust_occup)
         super().reset()

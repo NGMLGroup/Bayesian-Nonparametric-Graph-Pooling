@@ -1,0 +1,9 @@
+# @package _global_
+
+pooler:
+  name: hosc
+  hparams:
+    k: 50
+    mu: 0.0
+    alpha: 1.0
+    hosc_ortho: false

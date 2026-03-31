@@ -4,8 +4,10 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import Compose
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
+from pytorch_lightning.loggers import TensorBoardLogger
 import hydra
 from omegaconf import DictConfig, OmegaConf
+from tgp.poolers import pooler_map
 
 # Local imports
 from source.data import PyGSPDataset
@@ -14,10 +16,8 @@ from source.models import ClusterModel
 from source.utils import (register_resolvers, 
                           reduce_precision, 
                           find_devices,
-                          NormalizeAdjSparse_with_ea,
                           SortNodes,
-                          CoefficientScheduler,
-                          CustomTensorBoardLogger)
+                          CoefficientScheduler)
 
 register_resolvers()
 reduce_precision()
@@ -29,7 +29,8 @@ def run(cfg : DictConfig) -> float:
     print(OmegaConf.to_yaml(cfg, resolve=True))
 
     ### 📊 Load data
-    trans = Compose([SortNodes(), NormalizeAdjSparse_with_ea(delta=0.85)]) if cfg.pooler.name == 'bnpool' else SortNodes()
+    pooler_transform = pooler_map[cfg.pooler.name].data_transforms()
+    trans = Compose([SortNodes(), pooler_transform]) if pooler_transform is not None else SortNodes()
     if cfg.dataset.family=='Planetoid':
         torch_dataset = Planetoid(root='data/', name=cfg.dataset.name,
                                   split=cfg.dataset.hparams.split,
@@ -41,13 +42,14 @@ def run(cfg : DictConfig) -> float:
         num_classes = torch_dataset.num_classes
     elif cfg.dataset.family=='PyGSPDataset':
         torch_dataset = PyGSPDataset(root='data/PyGSP', name=cfg.dataset.name, 
-                                     kwargs=cfg.dataset.params, force_reload=cfg.dataset.hparams.reload,
+                                     kwargs=cfg.dataset.params, force_reload=True,
                                      pre_transform=trans)
         num_classes = cfg.architecture.hparams.pool_ratio 
     else:
         raise ValueError(f"Dataset {cfg.dataset.family} not recognized")
     
-    num_clusters = cfg.pooler.hparams.n_clusters if cfg.pooler.name == 'bnpool' else num_classes
+    pooler_hparams = {} if cfg.pooler.hparams is None else dict(cfg.pooler.hparams)
+    num_clusters = pooler_hparams.get('k', num_classes)
       
     data_loader = DataLoader(torch_dataset, batch_size=cfg.batch_size, shuffle=False)
 
@@ -58,7 +60,6 @@ def run(cfg : DictConfig) -> float:
         num_layers_pre=cfg.architecture.hparams.num_layers_pre,         # Number of GIN layers before pooling
         hidden_channels=cfg.architecture.hparams.hidden_channels,       # Dimensionality of node embeddings
         activation=cfg.architecture.hparams.activation,                 # Activation of the MLP in GIN 
-        use_cache=cfg.architecture.hparams.use_cache,                   # Cache computation of dense adjacency
         pooler=cfg.pooler.name,                                         # Pooling method
         pool_kwargs=cfg.pooler.hparams,                                 # Pooling method kwargs
         pooled_nodes=num_classes,                                       # Number of nodes after pooling
@@ -83,16 +84,14 @@ def run(cfg : DictConfig) -> float:
         scheduler_class=scheduler_class,
         scheduler_kwargs=scheduler_kwargs,
         log_lr=cfg.log_lr,
-        log_grad_norm=cfg.log_grad_norm,
-        plot_dict=dict(cfg.plot_preds_at_epoch))
+        log_grad_norm=cfg.log_grad_norm)
 
 
     ### 🪵 Logger
     if cfg.get('logger').get('backend') is None:
         logger = None
     elif cfg.logger.backend == 'tensorboard':
-        logger = CustomTensorBoardLogger(save_dir=cfg.logger.logdir, name=None, version='')
-        logger.cfg = cfg
+        logger = TensorBoardLogger(save_dir=cfg.logger.logdir, name=None, version='')
     else:
         raise NotImplementedError("Logger backend not supported.")
     
@@ -127,13 +126,15 @@ def run(cfg : DictConfig) -> float:
 
 
     ### 🚀 Trainer
+    accelerator = 'gpu' if torch.cuda.is_available() else 'cpu'
+    devices = find_devices(1) if accelerator == 'gpu' else 1
     trainer = pl.Trainer(
         logger=logger,
         callbacks=cb, 
-        devices=find_devices(1),
+        devices=devices,
         max_epochs=cfg.epochs, 
         gradient_clip_val=cfg.clip_val,
-        accelerator='gpu',
+        accelerator=accelerator,
         )
     trainer.fit(lightning_model, data_loader)
 
@@ -142,7 +143,8 @@ def run(cfg : DictConfig) -> float:
     else:
         trainer.test(lightning_model, data_loader)
 
-    logger.finalize('success')
+    if logger is not None:
+        logger.finalize('success')
 
     return trainer.callback_metrics["test_loss"].item()
 

@@ -1,7 +1,0 @@
-# @package _global_
-
-lr_scheduler:
-  name: MultiStepLR
-  hparams:
-    gamma: 0.3
-    milestones: [ 20, 40, 60, 80 ]

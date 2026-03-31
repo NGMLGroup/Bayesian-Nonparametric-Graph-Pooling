@@ -1,220 +1,203 @@
 import torch
-from torch.nn import Linear
+import torch.nn.functional as F
+from torch_geometric.nn import DenseGINConv, GINConv, GINEConv, MLP, global_add_pool
 from torch_geometric.nn.resolver import activation_resolver
-from torch_geometric.utils import to_dense_batch
-from torch_geometric.nn import (GINConv, GINEConv, MLP, DenseGINConv,
-                                dense_mincut_pool, dense_diff_pool, 
-                                global_add_pool, DMoNPooling, TopKPooling,
-                                ASAPooling, graclus)
-
-# Local imports
-from source.layers.edgepool.edge_pool import EdgePooling
-from source.layers.kmis.kmis_pool import KMISPooling
-from source.layers.sum_pool import sum_pool
-from source.layers.just_balance import just_balance_pool
-from source.layers.bnpool import BNPool
-from source.utils import cluster_to_s
-from source.utils.misc import TensorsCache
+from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
+from ._pooling import build_pooler
 
 
 class ClassificationModel(torch.nn.Module):
-    """
-    Torch module consisting of:
-    - a stack of GIN layers before pooling
-    - a pooling layer
-    - a stack of GIN layers after pooling
-    - a readout layer
-
-    Args:
-        in_channels (int): Size of node features
-        out_channels (int): Number of classes
-        edge_channels (int): Size of edge features
-        num_layers_pre (int): Number of GIN layers before pooling
-        num_layers_post (int): Number of GIN layers after pooling
-        hidden_channels (int): Dimensionality of node embeddings
-        activation (str): Activation of the MLP in GIN
-        pooler (str): Name of the pooling method
-        pool_kwargs (dict): Pooling method kwargs
-        pooled_nodes (int): Number of nodes after pooling
-        use_gine (bool): Use GINE instead of GIN
-        dropout (float): Dropout of the readout
-    """
-    def __init__(self, 
-                 in_channels,                           # Size of node features
-                 out_channels,                          # Number of classes
-                 edge_channels=None,                    # Size of edge features
-                 num_layers_pre=1,                      # Number of GIN layers before pooling
-                 num_layers_post=1,                     # Number of GIN layers after pooling
-                 hidden_channels=64,                    # Dimensionality of node embeddings
-                 activation='ELU',                      # Activation of the MLP in GIN 
-                 pooler=None,                           # Pooling method
-                 pool_kwargs=None,                      # Pooling method kwargs
-                 pooled_nodes=None,                     # Number of nodes after pooling
-                 use_gine=False,                        # Use GINE instead of GIN
-                 dropout=0.5,                           # Dropout of the readout
-                 ):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        edge_channels=None,
+        num_layers_pre=1,
+        num_layers_post=1,
+        hidden_channels=64,
+        activation='ELU',
+        pooler=None,
+        pool_kwargs=None,
+        pooled_nodes=None,
+        use_gine=False,
+        dropout=0.5,
+    ):
         super().__init__()
-        
+
         self.num_classes = out_channels
         self.act = activation_resolver(activation)
         self.pooler = pooler
-        if edge_channels is not None and use_gine:
-            self.using_gine = True
-        else:
-            self.using_gine = False
-        self.cache = TensorsCache(use_cache=False)
+        self.dropout = dropout
+        self.using_gine = edge_channels is not None and use_gine
 
-        ### Pre-pooling block            
+        in_channels, edge_channels = self.init_encoders(in_channels, edge_channels)
+
         self.conv_layers_pre = torch.nn.ModuleList()
+        channels = in_channels
         for _ in range(num_layers_pre):
-            mlp = MLP([in_channels, hidden_channels, hidden_channels], act=activation)
+            mlp = self.build_pre_mlp(channels, hidden_channels, activation)
             if self.using_gine:
                 self.conv_layers_pre.append(GINEConv(nn=mlp, train_eps=False, edge_dim=edge_channels))
             else:
                 self.conv_layers_pre.append(GINConv(nn=mlp, train_eps=False))
-            in_channels = hidden_channels
-                        
-        ### Pooling block
-        if pooler in ['diffpool','mincut']:
-            self.pool = Linear(hidden_channels, pooled_nodes)
-            self.l1_weight = pool_kwargs['l1_weight']
-            self.l2_weight = pool_kwargs['l2_weight']
-        elif pooler=='dmon':
-            self.pool = DMoNPooling(hidden_channels, pooled_nodes)
-            self.l1_weight = pool_kwargs['l1_weight']
-            self.l2_weight = pool_kwargs['l2_weight']
-            self.l3_weight = pool_kwargs['l3_weight']
-        elif pooler=='just_balance':
-            self.pool = Linear(hidden_channels, pooled_nodes)
-            self.normalize = pool_kwargs['normalize']
-        elif pooler=='topk':
-            self.pool = TopKPooling(hidden_channels, **pool_kwargs)
-        elif pooler=='asapool':
-            self.pool = ASAPooling(hidden_channels, **pool_kwargs)  
-        elif pooler=='edgepool':
-            self.pool = EdgePooling(hidden_channels)
-        elif pooler in ['graclus','nopool']:
-            pass
-        elif pooler=='kmis':
-            self.pool = KMISPooling(hidden_channels, **pool_kwargs)
-        elif pooler=='bnpool':
-            self.pool = BNPool(emb_size=hidden_channels, **pool_kwargs)
-            self.balance_links = pool_kwargs['balance_links']
+            channels = hidden_channels
+        self.pre_norms = self.build_pre_norms(num_layers_pre, hidden_channels)
 
-        ### Post-pooling block
+        self.pool = build_pooler(pooler, channels, pooled_nodes, pool_kwargs)
+        self.use_dense_pool = self.pool.is_dense and not getattr(self.pool, 'sparse_output', False)
+        self.use_pool_edge_features = pooler == 'kmis'
+        post_channels = channels
+        if pooler == 'eigen':
+            post_channels *= self.pool.num_modes
+
         self.conv_layers_post = torch.nn.ModuleList()
         for _ in range(num_layers_post):
-            mlp = MLP([hidden_channels, hidden_channels, hidden_channels], act=activation, norm=None)
-            if pooler in ['diffpool','mincut','dmon','just_balance','bnpool']:
+            mlp = self.build_post_mlp(post_channels, activation)
+            if self.use_dense_pool:
                 self.conv_layers_post.append(DenseGINConv(nn=mlp, train_eps=False))
-            elif pooler in ['kmis']: # 💡 Add here other methods that generate a sparse weighted pooled adj
+            elif self.use_pool_edge_features:
                 self.conv_layers_post.append(GINEConv(nn=mlp, train_eps=False, edge_dim=1))
             else:
                 self.conv_layers_post.append(GINConv(nn=mlp, train_eps=False))
 
-        ### Readout
-        self.mlp = MLP([hidden_channels, hidden_channels, hidden_channels//2, out_channels], 
-                        act=activation,
-                        norm=None,
-                        dropout=dropout)
+        self.mlp = self.build_readout_mlp(post_channels, out_channels, activation)
+
+    def init_encoders(self, in_channels, edge_channels):
+        return in_channels, edge_channels
+
+    def encode_inputs(self, x, edge_attr):
+        return x, edge_attr
+
+    def build_pre_mlp(self, in_channels, hidden_channels, activation):
+        return MLP(
+            [in_channels, hidden_channels, hidden_channels],
+            act=activation,
+            **self.pre_mlp_kwargs(),
+        )
+
+    def pre_mlp_kwargs(self):
+        return {}
+
+    def build_pre_norms(self, num_layers_pre, hidden_channels):
+        return None
+
+    def apply_pre_layer(self, x, layer_idx):
+        return x
+
+    def build_post_mlp(self, hidden_channels, activation):
+        return MLP([hidden_channels, hidden_channels, hidden_channels], act=activation, norm=None)
+
+    def build_readout_mlp(self, hidden_channels, out_channels, activation):
+        return MLP(
+            [hidden_channels, hidden_channels, hidden_channels // 2, out_channels],
+            act=activation,
+            **self.readout_mlp_kwargs(),
+        )
+
+    def readout_mlp_kwargs(self):
+        return {'norm': None, 'dropout': self.dropout}
+
+    def apply_readout(self, x):
+        return self.mlp(x)
 
     def forward(self, data):
-        """
-        ⏩ 
-        """
-        x = data.x    
+        x = data.x
         adj = data.edge_index
-        ea = getattr(data, 'edge_attr', None)
+        edge_attr = getattr(data, 'edge_attr', None)
+        edge_weight = getattr(data, 'edge_weight', None)
         batch = data.batch
+        x, edge_attr = self.encode_inputs(x, edge_attr)
 
-        ### Pre-pooling block
-        if self.using_gine:
-            for layer in self.conv_layers_pre:  
-                x = self.act(layer(x, adj, edge_attr=ea))
-        else:
-            for layer in self.conv_layers_pre:  
+        for layer_idx, layer in enumerate(self.conv_layers_pre):
+            if self.using_gine:
+                x = self.act(layer(x, adj, edge_attr=edge_attr))
+            else:
                 x = self.act(layer(x, adj))
+            x = self.apply_pre_layer(x, layer_idx)
 
-        ### Pooling block
-        if self.pooler in ['diffpool','mincut','dmon','just_balance', 'bnpool']:
-            x, mask = to_dense_batch(x, batch)
-            adj = self.cache.get_and_cache_A(adj, batch)
-            if self.pooler=='diffpool':
-                s = self.pool(x)
-                x, adj, l1, l2 = dense_diff_pool(x, adj, s, mask)
-                aux_loss = self.l1_weight*l1 + self.l1_weight*l2
-            elif self.pooler=='mincut':
-                s = self.pool(x)
-                x, adj, l1, l2 = dense_mincut_pool(x, adj, s, mask)
-                aux_loss = self.l1_weight*l1 + self.l2_weight*l2
-            elif self.pooler=='dmon':  
-                s, x, adj, l1, l2, l3 = self.pool(x, adj, mask)
-                aux_loss = self.l1_weight*l1 + self.l1_weight*l2 + self.l1_weight*l3
-            elif self.pooler=='just_balance':
-                s = self.pool(x)
-                x, adj, aux_loss = just_balance_pool(x, adj, s, mask=mask, 
-                                                     normalize=self.normalize)
-            elif self.pooler=='bnpool':
-                pos_weight = None if not self.balance_links else self.cache.get_and_cache_pos_weight(adj, mask)
-                s, x, adj, nonempty_clust, loss_d = self.pool(x, adj=adj, node_mask=mask,
-                                                              pos_weight=pos_weight,
-                                                              return_coarsened_graph=True)
-                aux_loss = loss_d['quality'] + loss_d['kl'] + loss_d['K_prior']
-        elif self.pooler=='topk':
-            x, adj, _, batch, perm, _ = self.pool(x, adj, edge_attr=None, batch=batch)
-            s = cluster_to_s(node_index=perm,
-                             num_nodes=data.x.size(0),
-                             cluster_index=torch.arange(perm.size(0), device=x.device),
-                             num_clusters=perm.size(0))
-        elif self.pooler=='asapool':
-            x, adj, _, batch, _ = self.pool(x, adj, batch=batch)
-        elif self.pooler=='edgepool':
-            x, adj, batch, _ = self.pool(x, adj, batch=batch)
-        elif self.pooler=='kmis':
-            x, adj, edge_weight, batch, _, cluster = self.pool(x, adj, edge_attr=None, batch=batch)
-            s = cluster_to_s(cluster_index=cluster)
-        elif self.pooler=='graclus':
-            data.x = x
-            cluster = graclus(adj, num_nodes=data.x.size(0))
-            data = sum_pool(cluster, data)
-            _, assignment = torch.unique(cluster, sorted=True, return_inverse=True)
-            s = cluster_to_s(cluster_index=assignment, 
-                             num_nodes=x.size(0), 
-                             num_clusters=data.x.size(0))
-            x = data.x    
-            adj = data.edge_index
-            batch = data.batch
-        elif self.pooler=='nopool':
-            pass
-        else:
-            raise KeyError(f"unrecognized pooling method: {self.pooler}")
-        
-        ### Post-pooling block
-        for layer in self.conv_layers_post:  
-            if self.pooler in ['kmis']: # 💡 Add all methods that generate a sparse weighted pooled adj
+        pool_out = self.pool(x=x, adj=adj, edge_weight=edge_weight, batch=batch)
+        x, adj = pool_out.x, pool_out.edge_index
+        edge_weight = pool_out.edge_weight
+        if pool_out.batch is not None:
+            batch = pool_out.batch
+        s = pool_out.so.s
+        loss_d = pool_out.loss
+        aux_loss = sum(pool_out.get_loss_value()) if loss_d is not None else x.new_zeros(())
+        clust_occup = None
+        if self.pooler == 'bnpool' and self.pool.batched:
+            clust_occup = s * pool_out.so.in_mask.unsqueeze(-1)
+
+        for layer in self.conv_layers_post:
+            if self.use_pool_edge_features:
+                if edge_weight is None:
+                    edge_weight = x.new_ones(adj.size(1))
                 x = self.act(layer(x, adj, edge_weight.unsqueeze(-1)))
             else:
                 x = self.act(layer(x, adj))
 
-        ### Readout
-        if self.pooler in ['diffpool','mincut','dmon','just_balance','bnpool']:
+        if self.use_dense_pool:
             x = torch.sum(x, dim=1)
         else:
             x = global_add_pool(x, batch)
-        x = self.mlp(x)
+        x = self.apply_readout(x)
 
-        if 'edge_weight' not in locals():
-            edge_weight=None
-        if 'aux_loss' not in locals():
-            aux_loss=0
-        if 'loss_d' not in locals():
-            loss_d=None
-        if 's' not in locals():
-            s=None
-        if 'nonempty_clust' not in locals():
-            nonempty_clust=None
+        return x, aux_loss, loss_d, clust_occup
 
-        if self.pooler in ['diffpool','mincut','just_balance']:
-            s = torch.softmax(s, dim=-1)
 
-        return x, adj, edge_weight, batch, s, aux_loss, loss_d, nonempty_clust
+class MolhivModel(ClassificationModel):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        edge_channels=None,
+        num_layers_pre=1,
+        num_layers_post=1,
+        hidden_channels=64,
+        activation='relu',
+        pooler=None,
+        pool_kwargs=None,
+        pooled_nodes=None,
+        use_gine=False,
+        dropout=0.0,
+    ):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            edge_channels=edge_channels,
+            num_layers_pre=num_layers_pre,
+            num_layers_post=num_layers_post,
+            hidden_channels=hidden_channels,
+            activation=activation,
+            pooler=pooler,
+            pool_kwargs=pool_kwargs,
+            pooled_nodes=pooled_nodes,
+            use_gine=use_gine,
+            dropout=dropout,
+        )
+
+    def init_encoders(self, in_channels, edge_channels):
+        self.atom_encoder = AtomEncoder(100)
+        self.bond_encoder = BondEncoder(100)
+        return 100, 100
+
+    def encode_inputs(self, x, edge_attr):
+        return self.atom_encoder(x), self.bond_encoder(edge_attr)
+
+    def pre_mlp_kwargs(self):
+        return {'norm': None}
+
+    def build_pre_norms(self, num_layers_pre, hidden_channels):
+        return torch.nn.ModuleList(
+            [torch.nn.BatchNorm1d(hidden_channels) for _ in range(num_layers_pre)]
+        )
+
+    def apply_pre_layer(self, x, layer_idx):
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        return self.pre_norms[layer_idx](x)
+
+    def readout_mlp_kwargs(self):
+        return {'norm': None}
+
+    def apply_readout(self, x):
+        x = F.dropout(x, p=self.dropout, training=self.training)
+        return self.mlp(x)

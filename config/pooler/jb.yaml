@@ -1,0 +1,7 @@
+# @package _global_
+
+pooler:
+  name: jb
+  hparams:
+    normalize_loss: true
+    loss_coeff: 1.0

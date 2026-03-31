@@ -3,5 +3,5 @@
 pooler:
   name: kmis
   hparams:
-    k: ${round:${div:1,${architecture.hparams.pool_ratio}}}
-    aggr_x: 'sum'
+    order_k: ${round:${div:1,${architecture.hparams.pool_ratio}}}
+    reduce_red_op: sum

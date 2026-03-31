@@ -5,7 +5,7 @@ import torch
 import torch_geometric
 from torch_geometric.data import InMemoryDataset, Data, download_url
 from torch_geometric.utils import from_scipy_sparse_matrix
-from pygsp2 import graphs
+from pygsp import graphs
 import os.path as osp
 import shutil
 from typing import Callable, List, Optional
@@ -191,6 +191,41 @@ class PyGSPDataset(InMemoryDataset):
         else:
             torch.save(self.collate(data_list), self.processed_paths[0])
 
+class MultipartiteGraphDataset(InMemoryDataset):
+    def __init__(self, root, 
+                 transform=None, 
+                 pre_transform=None, 
+                 pre_filter=None, 
+                 force_reload=False):
+        
+        super(MultipartiteGraphDataset, self).__init__(
+            root=root, 
+            transform=transform, 
+            pre_transform=pre_transform, 
+            pre_filter=pre_filter, 
+            force_reload=force_reload)
+        self.data, self.slices = torch.load(self.processed_paths[0], weights_only=False)
+
+    @property
+    def raw_file_names(self):
+        return ['Multipartite.pkl']
+
+    @property
+    def processed_file_names(self):
+        return 'data.pt'
+
+    def download(self):
+        download_url('https://zenodo.org/records/11617423/files/Multipartite.pkl?download=1', 
+                     self.raw_dir)
+
+    def process(self):
+        data_list = torch.load(path.join(self.raw_dir, 'Multipartite.pkl'), weights_only=False)
+        if self.pre_filter is not None:
+            data_list = [data for data in data_list if self.pre_filter(data)]
+        if self.pre_transform is not None:
+            data_list = [self.pre_transform(data) for data in data_list]
+        data, slices = self.collate(data_list)
+        torch.save((data, slices), self.processed_paths[0])
 
 class TUDataset(InMemoryDataset):
     r"""A variety of graph kernel benchmark datasets, *.e.g.*,

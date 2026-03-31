@@ -2,13 +2,12 @@
 
 pooler:
   name: bnpool
-
   hparams:
     k: 50
-    alpha_DP: 10.0
+    alpha_DP: 1.0
     K_var: 1.0
     K_mu: 10.0
     K_init: 1.0
     eta: 1.0
     train_K: true
-    batched: true
+    batched: false

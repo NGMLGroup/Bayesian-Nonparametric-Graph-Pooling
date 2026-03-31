@@ -1,2 +1,6 @@
 from .clustering_module import ClusterModule
-from .classification_module import ClassificationModule
+from .classification_module import (
+    ClassificationModule,
+    MultiClassificationModule,
+    RegressionModule,
+)

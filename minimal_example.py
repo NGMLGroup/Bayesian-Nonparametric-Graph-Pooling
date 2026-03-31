@@ -1,19 +1,16 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.nn import GINConv, DenseGINConv
-from torch_geometric.utils import to_dense_batch
 from torch_geometric.loader import DataLoader
 from torch_geometric.datasets import TUDataset
+from tgp.poolers import BNPool
 
 # Local imports
-from source.layers.bnpool import BNPool
-from source.utils import NormalizeAdjSparse_with_ea
-from source.utils.misc import TensorsCache
 from source.utils.data import get_train_val_test_datasets
 
 
 ### Get the data
-dataset = TUDataset(root="data/TUDataset", name='MUTAG', pre_transform=NormalizeAdjSparse_with_ea())
+dataset = TUDataset(root="data/TUDataset", name='MUTAG', pre_transform=BNPool.data_transforms())
 train_dataset, val_dataset, test_dataset = get_train_val_test_datasets(dataset, seed=777, n_folds=10, fold_id=0)
 tr_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=32)
@@ -28,7 +25,6 @@ class Net(torch.nn.Module):
         num_features = dataset.num_features
         num_classes = dataset.num_classes
         hidden_channels = 64  
-        self.cache = TensorsCache(use_cache=False)
 
         # First MP layer
         self.conv1 = GINConv(
@@ -40,7 +36,7 @@ class Net(torch.nn.Module):
         )
 
         # BNPool layer
-        self.pool = BNPool(emb_size=hidden_channels)
+        self.pool = BNPool(in_channels=hidden_channels, k=50, batched=True)
 
         # Second MP layer
         self.conv2 = DenseGINConv(
@@ -54,21 +50,15 @@ class Net(torch.nn.Module):
         # Readout layer
         self.lin = torch.nn.Linear(hidden_channels, num_classes)
 
-    def forward(self, x, edge_index, batch=None):
+    def forward(self, x, edge_index, edge_weight=None, batch=None):
 
         # First MP layer
         x = self.conv1(x, edge_index)
 
-        # Transform to dense batch
-        x, mask = to_dense_batch(x, batch)
-        adj = self.cache.get_and_cache_A(edge_index, batch)
-
         # BNPool layer
-        pos_weight = self.cache.get_and_cache_pos_weight(adj, mask)
-        _, x, adj, _, loss_d = self.pool(x, adj=adj, node_mask=mask,
-                                         pos_weight=pos_weight,
-                                         return_coarsened_graph=True)
-        aux_loss = loss_d['quality'] + loss_d['kl'] + loss_d['K_prior']
+        pool_out = self.pool(x=x, adj=edge_index, edge_weight=edge_weight, batch=batch)
+        x, adj = pool_out.x, pool_out.edge_index
+        aux_loss = sum(pool_out.get_loss_value())
 
         # Second MP layer
         x = self.conv2(x, adj)
@@ -95,7 +85,7 @@ def train():
     for data in tr_dataloader:
         data = data.to(device)
         optimizer.zero_grad()
-        output, aux_loss = model(data.x, data.edge_index, data.batch)
+        output, aux_loss = model(data.x, data.edge_index, getattr(data, 'edge_weight', None), data.batch)
         loss = F.nll_loss(output, data.y.view(-1)) + aux_loss
         loss.backward()
         loss_all += data.y.size(0) * float(loss)
@@ -109,7 +99,7 @@ def test(loader):
     correct = 0
     for data in loader:
         data = data.to(device)
-        pred = model(data.x, data.edge_index, data.batch)[0].max(dim=1)[1]
+        pred = model(data.x, data.edge_index, getattr(data, 'edge_weight', None), data.batch)[0].max(dim=1)[1]
         correct += int(pred.eq(data.y.view(-1)).sum())
     return correct / len(loader.dataset)
 

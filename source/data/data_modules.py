@@ -1,19 +1,68 @@
-import os
 import os.path as osp
+import shutil
 import pytorch_lightning as pl
 
-from torch_geometric.datasets import Planetoid
-from torch_geometric.datasets import HeterophilousGraphDataset, WikipediaNetwork, WebKB
+from torch_geometric.datasets import LRGBDataset
 from torch_geometric.transforms import Constant, Compose
 from torch_geometric.loader import DataLoader
-from torch_geometric.utils import homophily
 from ogb.graphproppred import PygGraphPropPredDataset
 
 # Local imports
-from source.utils import LabelsToInt, get_train_val_test_datasets
+from source.utils import (
+    LabelsToInt,
+    get_train_val_test_datasets,
+)
 from .torch_datasets import (GraphClassificationBench, 
-                             PyGSPDataset, 
+                             MultipartiteGraphDataset,
                              TUDataset)
+
+
+def _get_num_edge_features(data):
+    edge_attr = getattr(data, "edge_attr", None)
+    if edge_attr is None:
+        return None
+    if edge_attr.dim() == 1:
+        return 1
+    if edge_attr.size(-1) == 0:
+        return None
+    return edge_attr.size(-1)
+
+
+def _infer_num_classes(dataset, override=None):
+    if override is not None:
+        return override
+
+    num_classes = getattr(dataset, "num_classes", None)
+    if num_classes is not None:
+        return num_classes
+
+    y = dataset[0].y
+    if y.dim() == 0:
+        return 1
+    return y.numel()
+
+
+def _set_graph_dataset_stats(module, dataset, num_classes=None):
+    storage = getattr(dataset, "_data", None)
+    if storage is None:
+        storage = getattr(dataset, "data", None)
+
+    module.num_edge_features = _get_num_edge_features(dataset[0]) or 0
+    module.num_features = dataset.num_features
+    module.num_classes = _infer_num_classes(dataset, override=num_classes)
+
+    if storage is not None and getattr(storage, "num_nodes", None) is not None:
+        total_nodes = storage.num_nodes
+    else:
+        total_nodes = sum(data.num_nodes for data in dataset)
+
+    module.avg_nodes = int(total_nodes / len(dataset))
+    module.max_nodes = max(data.num_nodes for data in dataset)
+
+
+def _squeeze_targets(dataset):
+    for data in dataset:
+        data.y = data.y.squeeze()
 
 
 class BenchHardDataModule(pl.LightningDataModule):
@@ -39,22 +88,7 @@ class BenchHardDataModule(pl.LightningDataModule):
         test_data_list = [data for data in orig_test_dataset]
         data_list = train_data_list + val_data_list + test_data_list
         self.train_dataset, self.val_dataset, self.test_dataset = get_train_val_test_datasets(data_list, args.seed, args.n_folds, args.fold_id)
-        if self.train_dataset[0].edge_attr is not None:
-            self.num_edge_features = self.train_dataset[0].edge_attr.size(1)
-        else:
-            self.num_edge_features = None
-        self.num_features = orig_train_dataset.num_features
-        self.num_classes = orig_train_dataset.num_classes
-        self.avg_nodes = int(orig_train_dataset.data.num_nodes / len(orig_train_dataset))
-        self.max_nodes = max([d.num_nodes for d in orig_train_dataset])
-
-        self.seed = args.seed
-        self.n_folds = args.n_folds
-        if args.fold_id is not None:
-            assert args.fold_id < args.n_folds
-            self.fold_id = args.fold_id
-        else:
-            self.fold_id = 0
+        _set_graph_dataset_stats(self, orig_train_dataset)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, self.args.batch_size, shuffle=True)
@@ -65,6 +99,33 @@ class BenchHardDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_dataset, self.args.batch_size)
     
+
+class MultipartiteDataModule(pl.LightningDataModule):
+    def __init__(self,
+                 args,
+                 pre_transform=None,
+                 force_reload=True):
+        super().__init__()
+        self.args = args
+        self.dataset = MultipartiteGraphDataset(
+            root="data/Multipartite",
+            pre_transform=pre_transform,
+            force_reload=force_reload,
+        )
+        _set_graph_dataset_stats(self, self.dataset)
+        self.train_dataset, self.val_dataset, self.test_dataset = get_train_val_test_datasets(
+            self.dataset, args.seed, args.n_folds, args.fold_id
+        )
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, self.args.batch_size, shuffle=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, self.args.batch_size)
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, self.args.batch_size)
+
 
 class TUDataModule(pl.LightningDataModule):
     def __init__(self, 
@@ -91,24 +152,8 @@ class TUDataModule(pl.LightningDataModule):
             pre_transform=transforms, 
             force_reload=force_reload)
         self.dataset = self.dataset.shuffle()
-        if self.dataset[0].edge_attr is not None:
-            self.num_edge_features = self.dataset[0].edge_attr.size(1)
-        else:
-            self.num_edge_features = None
-        self.num_features = self.dataset.num_features
-        self.num_classes = self.dataset.num_classes
-        self.avg_nodes = int(self.dataset.data.num_nodes / len(self.dataset)) # why like this and not with sum()/len()?
-        self.max_nodes = max([d.num_nodes for d in self.dataset])
-
+        _set_graph_dataset_stats(self, self.dataset)
         self.train_dataset, self.val_dataset, self.test_dataset = get_train_val_test_datasets(self.dataset, args.seed, args.n_folds, args.fold_id)
-        
-        self.seed = args.seed
-        self.n_folds = args.n_folds
-        if args.fold_id is not None:
-            assert args.fold_id < args.n_folds
-            self.fold_id = args.fold_id
-        else:
-            self.fold_id = 0
     
     def train_dataloader(self):
         return DataLoader(self.train_dataset, self.args.batch_size, shuffle=True)
@@ -135,21 +180,15 @@ class OGBDataModule(pl.LightningDataModule):
             new_trans.append(Constant())
         transforms = Compose(new_trans) if pre_transform is None else Compose([pre_transform, *new_trans])
 
-        if args.get('reload', False):    
-            # Delete pre-processed data
-            processed_path = osp.join(path, '_'.join(name.split('-')), 'processed')
-            if osp.exists(processed_path):
-                print(f"Force reload: deleting {processed_path}")
-                os.system(f"rm -r {processed_path}")
+        processed_path = osp.join(path, '_'.join(name.split('-')), 'processed')
+        if osp.exists(processed_path):
+            print(f"Deleting cached processed data at {processed_path}")
+            shutil.rmtree(processed_path)
 
         if name in ['ogbg-ppa', 'ogbg-molhiv']:
             self.dataset = PygGraphPropPredDataset(name=name, root=path, pre_transform=transforms)
         else:
             raise NotImplementedError(f"Dataset {name} not supported")
-        if self.dataset[0].edge_attr is not None:
-            self.num_edge_features = self.dataset[0].edge_attr.size(1)
-        else:
-            self.num_edge_features = None
         split_idx = self.dataset.get_idx_split()
         
         orig_train_dataset = self.dataset[split_idx["train"]]
@@ -160,21 +199,13 @@ class OGBDataModule(pl.LightningDataModule):
         val_data_list = [data for data in orig_val_dataset]
         test_data_list = [data for data in orig_test_dataset]
 
-        for data in train_data_list:
-            data.y = data.y.squeeze()
-
-        for data in val_data_list:
-            data.y = data.y.squeeze()
-
-        for data in test_data_list:
-            data.y = data.y.squeeze()
+        _squeeze_targets(train_data_list)
+        _squeeze_targets(val_data_list)
+        _squeeze_targets(test_data_list)
 
         self.train_dataset, self.val_dataset, self.test_dataset = train_data_list, val_data_list, test_data_list
 
-        self.num_features = orig_train_dataset.num_features
-        self.num_classes = orig_train_dataset.num_classes
-        self.avg_nodes = int(orig_train_dataset.data.num_nodes / len(orig_train_dataset))
-        self.max_nodes = max([d.num_nodes for d in orig_train_dataset])
+        _set_graph_dataset_stats(self, orig_train_dataset)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, self.args.batch_size, shuffle=True, 
@@ -189,17 +220,47 @@ class OGBDataModule(pl.LightningDataModule):
                           num_workers=self.args.get('num_workers', 0))
 
 
-class PyGSPDataModule(pl.LightningDataModule):
-    def __init__(self, 
+class LRGBDataModule(pl.LightningDataModule):
+    def __init__(self,
+                 name,
                  args,
                  pre_transform=None):
         super().__init__()
         self.args = args
-        path = "data/PyGSP"
+        path = "data/lrgb/"
 
-        self.dataset = PyGSPDataset(root=path, name=args.pygsp_graph, 
-                                    pre_transform=pre_transform, force_reload=args.reload)
-        self.num_features = self.dataset.num_features
+        self.train_dataset = LRGBDataset(
+            root=path,
+            name=name,
+            split='train',
+            pre_transform=pre_transform,
+            force_reload=True,
+        )
+        self.val_dataset = LRGBDataset(
+            root=path,
+            name=name,
+            split='val',
+            pre_transform=pre_transform,
+            force_reload=True,
+        )
+        self.test_dataset = LRGBDataset(
+            root=path,
+            name=name,
+            split='test',
+            pre_transform=pre_transform,
+            force_reload=True,
+        )
+
+        _set_graph_dataset_stats(self, self.train_dataset)
 
     def train_dataloader(self):
-        return DataLoader(self.dataset, self.args.batch_size)
+        return DataLoader(self.train_dataset, self.args.batch_size, shuffle=True,
+                          num_workers=self.args.get('num_workers', 0))
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, self.args.batch_size,
+                          num_workers=self.args.get('num_workers', 0))
+
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, self.args.batch_size,
+                          num_workers=self.args.get('num_workers', 0))

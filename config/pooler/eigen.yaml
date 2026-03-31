@@ -1,6 +1,6 @@
 # @package _global_
 
 pooler:
-  name: just_balance
+  name: eigen
   hparams:
-    normalize: true
+    num_modes: 3

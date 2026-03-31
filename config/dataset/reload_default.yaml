@@ -1,5 +1,0 @@
-# @package _global_
-
-dataset:
-  hparams:
-    reload: True

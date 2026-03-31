@@ -20,13 +20,6 @@ workers: 16
 log_grad_norm: False
 log_lr: True
 
-plot_preds_at_epoch:
-  set: ['train']
-  batch: 0
-  samples: 0
-  every: 100
-  types: []
-
 #### Training params
 epochs: 10000
 limit_train_batches: null

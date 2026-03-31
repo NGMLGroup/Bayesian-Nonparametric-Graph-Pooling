@@ -1,7 +1,8 @@
 from .data_modules import (BenchHardDataModule, 
+                           MultipartiteDataModule,
                            TUDataModule, 
                            OGBDataModule,
-                           PyGSPDataModule,
+                           LRGBDataModule,
                         #    NodeClassDataModule
                            )
 

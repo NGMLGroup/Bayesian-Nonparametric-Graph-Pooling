@@ -3,13 +3,10 @@ defaults:
   - override hydra/sweeper: basic 
   - _self_
 
-plot_preds_at_epoch:
-  types: [] 
-
-epochs: 10
+epochs: 2
 
 hydra:
   sweeper:
     params:
-      dataset: bench-hard, collab, colors, imdb-b, mutagenicity, NCI1, reddit-b, dd, mutag, enzymes, proteins, molhiv
-      pooler: bnpool, mincut, diffpool, dmon, justbalance, graclus, edgepool, kmis, topk
+      dataset: collab, colors, mutagenicity, NCI1, reddit-b, mutag, enzymes, proteins, molhiv, pep-s, multipartite, bench-hard, imdb-b, dd
+      pooler: bnpool, mincut, diff, dmon, jb, graclus, ec, kmis, sep, eigen, topk
