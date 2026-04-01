@@ -20,6 +20,7 @@ dependencies = [
     "torch-scatter==2.1.2",
     "torch-sparse==0.6.18",
     "torchmetrics==1.9.0",
+    "setuptools==81.0.0"
 ]
 
 [tool.uv]
